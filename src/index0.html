@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - glTF loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+		
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.7.2/proj4.js"></script>
+
+	</head>
+
+	<body>
+<div style="position:absolute; color:white;" id="distancePlace">0</div>
+
+<div id="threeJS" style="width:1200px; height:600px;"></div>
+
+<script type="x-shader/x-vertex" id="vertexShader">
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+				vWorldPosition = worldPosition.xyz;
+
+				gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script type="x-shader/x-fragment" id="fragmentShader">
+
+			uniform vec3 topColor;
+			uniform vec3 bottomColor;
+			uniform float offset;
+			uniform float exponent;
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				float h = normalize( vWorldPosition + offset ).y;
+				gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+
+			}
+
+		</script>
+
+		<script type="module">
+		
+		var orig_opt = {
+		
+			geojson: "./shots_0.geojson",
+			pano_path: "../assets/panoramas/",
+			imgExt: ".png",
+			increment: 10
+		
+		};
+		
+		var re_opt = {
+		
+			geojson: "./shots_reshoot_UTM29N_full.geojson",
+			pano_path: "../assets/panoramas_reshoot/",
+			imgExt: ".jpg",
+			increment: 1
+		
+		};
+		
+		var re2_opt = {
+		
+			geojson: "./shots_reshoot2_UTM_fixed.geojson",
+			pano_path: "../assets/panoramas_reshoot2/",
+			imgExt: ".jpg",
+			increment: 1
+		
+		};
+		
+		var data_opt = re2_opt; //re_opt; //
+
+		var SCREEN_WIDTH = 1200; //window.innerWidth;
+		var SCREEN_HEIGHT = 600; //window.innerHeight;
+
+		var aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+
+		var options = {
+			opacityLevel: 0.9,
+			togglePanoramas: false,
+			toggleBIM: true,
+			lockOrbit: false,
+			clippingFar: 100
+		};
+
+//////start clipping cylinder shader
+
+	 var clippingSphere = {
+		 value: new THREE.Vector4()
+	 };
+
+	 var params = {
+	 	diffuse: "white",
+	 	diffuseBack: "orange",
+	 	inside: false
+	};
+   //function getMaterial(params) {
+
+
+
+     var diffuse = params.diffuse === undefined ? 0xffffff : params.diffuse;
+     var diffuseBack = params.diffuseBack === undefined ? diffuse : params.diffuseBack;
+
+     var inside = params.inside === undefined ? true : params.inside;
+     inside = inside ? 1 : -1;
+
+     let lambert = new THREE.ShaderMaterial({
+       uniforms: THREE.UniformsUtils.merge([THREE.ShaderLib.lambert.uniforms, {
+         clippingSphere,
+         diffuseBack: {
+           value: new THREE.Color()
+         }
+       }]),
+
+       vertexShader: THREE.ShaderLib.lambert.vertexShader
+         .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+         .replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+       fragmentShader: THREE.ShaderLib.lambert.fragmentShader
+         .replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;\nuniform vec3 diffuseBack;')
+         .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+         .replace(/#include <clipping_planes_fragment>/g, '#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;')
+         .replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+
+       lights: true,
+
+       side: THREE.DoubleSide,
+
+       flatShading: true
+     });
+
+     lambert.uniforms.clippingSphere.value.set(new THREE.Vector4(0, 0, 0, options.clippingFar * inside));
+     lambert.uniforms.diffuse.value.set(diffuse);
+     lambert.uniforms.diffuseBack.value.set(diffuseBack);
+
+     //return lambert;
+   //}
+
+/*
+		vertexShader: THREE.ShaderLib.basic.vertexShader
+			.replace(/#include <common>/g, 'varying vec4 worldPosition;\n#include <common>')
+			.replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+		fragmentShader: THREE.ShaderLib.basic.fragmentShader
+			.replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;')
+			.replace(/uniform vec4 clippingSphere;/g, 'uniform vec4 clippingSphere;\nvarying vec4 worldPosition;')
+			.replace(/#include <clipping_planes_fragment>/g, 'varying vec4 worldPosition;\n#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;'),
+			//.replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+*/
+
+//////end clipping cylinder shader
+
+		import * as THREE from '../build/three.module.js';
+
+					import { OrbitControls } from './jsm/controls/OrbitControls.js';
+					import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+					import { RGBELoader } from './jsm/loaders/RGBELoader.js';
+					import { RoughnessMipmapper } from './jsm/utils/RoughnessMipmapper.js';
+
+					import { PLYLoader } from './jsm/loaders/PLYLoader.js';
+
+					var container, controls;
+					var overviewCamera, camera, scene, renderer;
+					var gltfScene;
+					var raycastArray = [];
+
+					var panoMesh;
+
+					var prevPano;
+
+					var shotList = [];
+
+					var panoBIMGroup = new THREE.Group();
+
+					let isUserInteracting = false,
+				onPointerDownMouseX = 0, onPointerDownMouseY = 0,
+				lon = 0, onPointerDownLon = 0,
+				lat = 0, onPointerDownLat = 0,
+				phi = 0, theta = 0;
+
+					var gui = new dat.GUI();
+					gui.domElement.parentElement.style.zIndex = 1000;
+
+					gui.add( options, 'opacityLevel', 0, 1 ).step( 0.01 ).name( 'opacity level' ).onChange( function ( value ) {
+							//panoMesh.material.opacity = value;
+							options.opacityLevel = value;
+
+							console.log("prevPano ", prevPano);
+							prevPano.material.opacity = value;
+							renderer.render(scene, camera);
+					} );
+
+					gui.add( options, 'togglePanoramas' ).name( 'toggle panoramas' ).onChange( function ( value ) {
+						panoMesh.visible = value;
+						console.log("prevPano vis ", prevPano);
+						//prevPano.visible = value;
+						function myFunction(item) {
+							console.log(item);
+						  item.visible = value;
+						  //document.getElementById("demo").innerHTML = sum;
+						}
+						shotList.forEach(myFunction);
+
+						prevPano.visible = true;
+
+						renderer.render(scene, camera);
+					} );
+
+					gui.add( options, 'toggleBIM' ).name( 'toggle BIM' ).onChange( function ( value ) {
+						//for ( var i = 0; i < clickableObjects.length; i ++ ) {
+						//  clickableObjects[ i ].visible = value;
+						//}
+						gltfScene.visible = value;
+						renderer.render(scene, camera);
+					} );
+/*
+					gui.add( options, 'lockOrbit' ).name( 'lock orbit' ).onChange( function ( value ) {
+						if ( value == false ) {
+							viewer.scene.remove( viewer.scene.view.lookAt( intersects[0].object.position.x, intersects[0].object.position.y, intersects[0].object.position.z ) );
+						}
+					} );
+*/
+					gui.add( options, 'clippingFar', 5, 100 ).step( 0.1 ).name( 'visible distance' ).onChange( function ( value ) {
+							options.clippingFar = value;
+							//camera.far = value;
+							var lP = lambert.uniforms.clippingSphere.value;
+							lambert.uniforms.clippingSphere.value.set(lP.x, lP.y, lP.z, options.clippingFar * inside);
+							camera.updateProjectionMatrix();
+							renderer.render(scene, camera);
+					} );
+
+
+					init();
+					//render();
+					animate();
+
+					function init() {
+
+						//container = document.createElement( 'div' );
+						//document.body.appendChild( container );
+						container = document.getElementById("threeJS");
+						
+						overviewCamera = new THREE.PerspectiveCamera( 90, 1, 1, 1000 ); // 45, 0.5 * aspect, 1, 1000 );
+						overviewCamera.position.set(200, 250, 0);
+						overviewCamera.lookAt(0, 0, 0);
+						//scene.add(overviewCamera);
+
+						camera = new THREE.PerspectiveCamera( 90, 1, 0.01, 1000 );
+						camera.position.set(- 1.8, 0.6, 2.7 ); // 678752, 5907144, 12.885000705718994 ); //
+						//camera.position.set(-703196.65625, 78.01599884033203, -7035536.25);
+						//scene.add(camera);
+
+
+						scene = new THREE.Scene();
+
+						//scene.add(overviewCamera);
+						//scene.add(camera);
+
+						scene.background = new THREE.Color().setHSL( 0.6, 0, 1 );
+										//scene.fog = new THREE.Fog( scene.background, 1, 5000 );
+
+										const groundGeo = new THREE.PlaneGeometry( 10000, 10000 );
+										const groundMat = new THREE.MeshLambertMaterial( { color: 0xffffff } );
+										groundMat.color.setHSL( 0.095, 1, 0.75 );
+
+										const ground = new THREE.Mesh( groundGeo, groundMat );
+										ground.position.y = - 33;
+										ground.rotation.x = - Math.PI / 2;
+										ground.receiveShadow = true;
+										//scene.add( ground );
+
+						const hemiLight = new THREE.HemisphereLight( 0xffffff, 0xffffff, 0.6 );
+										hemiLight.color.setHSL( 0.6, 1, 0.6 );
+										hemiLight.groundColor.setHSL( 0.095, 1, 0.75 );
+										hemiLight.position.set( 0, 50, 0 );
+										scene.add( hemiLight );
+
+										const vertexShader = document.getElementById( 'vertexShader' ).textContent;
+										const fragmentShader = document.getElementById( 'fragmentShader' ).textContent;
+										const uniforms = {
+											"topColor": { value: new THREE.Color( 0x0077ff ) },
+											"bottomColor": { value: new THREE.Color( 0xffffff ) },
+											"offset": { value: 33 },
+											"exponent": { value: 0.6 }
+										};
+										uniforms[ "topColor" ].value.copy( hemiLight.color );
+
+										//scene.fog.color.copy( uniforms[ "bottomColor" ].value );
+
+										const skyGeo = new THREE.SphereGeometry( 4000, 32, 15 );
+										const skyMat = new THREE.ShaderMaterial( {
+											uniforms: uniforms,
+											vertexShader: vertexShader,
+											fragmentShader: fragmentShader,
+											side: THREE.BackSide
+										} );
+
+										const sky = new THREE.Mesh( skyGeo, skyMat );
+										scene.add( sky );
+
+						var size = 10;
+		var divisions = 10;
+
+		var gridHelper = new THREE.GridHelper( size, divisions );
+		scene.add( gridHelper );
+
+						var light = new THREE.AmbientLight( 0x404040 ); // soft white light
+						scene.add( light );
+
+						var light = new THREE.DirectionalLight(0xffffff, 1);
+						light.position.set(0, 50, 0);
+						scene.add(light);
+
+						var light2 = new THREE.DirectionalLight(0xffffff, 0.5);
+//light2.position.set(10, 5, -10);
+scene.add(light2);
+
+						var panoGeom = new THREE.SphereBufferGeometry( 500, 60, 40 );
+						panoGeom.scale( - 1, 1, 1 );
+						var panoTex = new THREE.TextureLoader().load( './a1.jpg' );
+						var panoMat = new THREE.MeshBasicMaterial( {depthTest: true, side: THREE.DoubleSide, map: panoTex, transparent: true, opacity: 0.5 } );
+						//var panoOutside = new THREE.MeshNormalMaterial( /*{ side: THREE.FrontSide }*/ );
+						panoMesh = new THREE.Mesh( panoGeom, panoMat );//panoMat );
+						panoMesh.renderOrder = 1;
+						panoMesh.position.set( 10, 10, 5 );
+						//scene.add( panoMesh );
+
+
+						var loader = new GLTFLoader().setPath( '../assets/' );
+						loader.load( '0.gltf', function ( gltf ) { // 'ITM_from_IFC_exporter.gltf', function ( gltf ) {
+
+							console.log("in gltf ", gltf);
+
+							gltf.scene.traverse( function ( child ) {
+
+								if ( child.isMesh ) {
+
+								//	child.material = getMaterial({
+							//		diffuse: "white",
+							//		diffuseBack: "orange",
+							//		inside: false
+								//	});
+
+									child.material = lambert;
+
+									//child.material.depthTest = true;
+							//		child.material.depthTest = false;
+							//		child.material.depthWrite = false;
+									//child.material = new THREE.MeshBasicMaterial({color: '#ff0000', side: THREE.DoubleSide});
+
+									// TOFIX RoughnessMipmapper seems to be broken with WebGL 2.0
+									// roughnessMipmapper.generateMipmaps( child.material );
+
+									//raycastArray.push(child);
+
+								}
+
+							} );
+
+							gltfScene = gltf.scene;
+							//gltfScene.renderOrder = 999;
+							//gltfScene.onBeforeRender = function( renderer ) { renderer.clearDepth(); };
+							console.log("gltfScene ", gltf, gltfScene);
+
+							gltfScene.renderOrder = 999;
+							//gltfScene.onBeforeRender = function( renderer ) { renderer.clearDepth(); };
+							//gltfScene.position.set(703196.65625, -78.01599884033203, 7035536.25);
+							//gltfScene.scale.multiplyScalar(0.001);
+
+							gltfScene.rotateX(Math.PI*0.5);
+
+							//scene.add( gltfScene );
+							panoBIMGroup.add(gltfScene);
+							raycastArray.push(gltfScene);
+
+					//		roughnessMipmapper.dispose();
+
+							//panoMesh.position.set(-703196.65625, 78.01599884033203, -7035536.25);
+							//camera.position.set(-703196.65625, 78.01599884033203, -7035536.25);
+
+
+
+							//render();
+
+						} );
+
+						//	} );
+
+						//	var pgeometry = new THREE.PlaneGeometry( 10, 10, 1, 1 );
+						//	pmesh = new THREE.Mesh( pgeometry, material.clone() );
+						//	pmesh.material.color.set( 0xff0000 );
+						//	pmesh.renderOrder = 0;
+						//	scene.add( pmesh );
+
+		/*
+						const plyloader = new PLYLoader();
+						plyloader.load('../assets/odm_translated.ply', function ( plygeometry ) { //odm_georeferenced_model.ply
+
+							//plygeometry.computeVertexNormals();
+
+							const plymaterial = new THREE.MeshStandardMaterial( { vertexColors: THREE.VertexColors } );
+							const plymesh = new THREE.Points( plygeometry, plymaterial );
+
+						//	plymesh.translateX = -678752;
+						//	plymesh.translateY = -5907144;
+						//	plymesh.translateZ = -12;
+							//plymesh.rotation.x = - Math.PI / 2;
+							//plymesh.scale.multiplyScalar( 0.001 );
+
+							console.log("plymesh ", plymesh);
+
+							plymesh.castShadow = true;
+							plymesh.receiveShadow = true;
+
+							scene.add( plymesh );
+
+							//const boundSphere = new THREE.Mesh();
+						//	panoMesh.position.set(plymesh.geometry.boundingSphere.center.x, plymesh.geometry.boundingSphere.center.y, plymesh.geometry.boundingSphere.center.z);
+
+						//	console.log("panoMesh ", panoMesh);
+
+							//camera.lookAt(plymesh.position);
+
+						});
+		*/
+
+		function rotate(vector, angleaxis) {
+				var v = new THREE.Vector3(vector[0], vector[1], vector[2]);
+				var axis = new THREE.Vector3(angleaxis[0], angleaxis[1], angleaxis[2]);
+				var angle = axis.length();
+				axis.normalize();
+				var matrix = new THREE.Matrix4().makeRotationAxis(axis, angle);
+				v.applyMatrix4(matrix);
+				return v;
+		}
+
+		function opticalCenter(shot) {
+				var angleaxis = [-shot.rotation[0], -shot.rotation[1], -shot.rotation[2]];
+				var Rt = rotate(shot.translation, angleaxis);
+				Rt.negate();
+				return Rt;
+		}
+
+			(async () => {
+				fetch(data_opt.geojson) //shots_reshoot_UTM29N.geojson") //"./shots_0.geojson"
+				.then(function(res) {
+					return res.json();
+				})
+				.then(async function(data) {
+
+					var xOff = 678790.3753; //712158.3404830345;
+					var yOff = 5907109.1250; //727174.4985701079;
+					//var zOff = 72.43303740163056;
+					//var zOff = 41.7;
+					var zOff = 98.5;
+					
+					//for (key in data.featureCollection) {
+					data.features.map((feature) => {
+
+						var [x, y, z] = feature.properties.translation; //geometry.coordinates;
+						var [rx, ry, rz] = feature.properties.rotation;
+						
+						
+						var UTM29N = "+proj=utm +zone=29 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs";
+						var ITM = "+proj=tmerc +lat_0=53.5 +lon_0=-8 +k=0.99982 +x_0=600000 +y_0=750000 +ellps=GRS80 +towgs84=0,0,0,0,0,0,0 +units=m +no_defs";
+						
+						var WGS84 = "+proj=longlat +datum=WGS84 +no_defs";
+						
+					//	var xyITM = proj4(WGS84, UTM29N, [feature.geometry.coordinates[0], feature.geometry.coordinates[1]]);
+						
+					//	x = xyITM[0];
+					//	y = xyITM[1];
+
+						var gjBox = new THREE.Mesh(new THREE.SphereGeometry(0.25,72,72), new THREE.MeshBasicMaterial({color: '#ff0000'}));
+
+						//gjBox.rotateX(Math.PI/2);
+
+						//var gjBoxOpticalCentre = opticalCenter(feature.properties);
+						//console.log("gjBoxOpticalCentre ", gjBoxOpticalCentre);
+
+						var gjBoxRotate = rotate([0, 0, 1], feature.properties.rotation);
+						//console.log("gjBoxRotate ", gjBoxRotate);
+						gjBox.rotateX(Math.PI/2);
+						gjBox.rotateY(Math.PI/2);
+						gjBox.rotateX(gjBoxRotate.x);// -Math.PI/2);
+						gjBox.rotateY(gjBoxRotate.y);
+						gjBox.rotateZ(gjBoxRotate.z);
+
+						gjBox.position.set(x - xOff, y - yOff, z - zOff);
+						console.log(gjBox.position);
+						//console.log(xyITM);
+						
+						gjBox.userData.shot_id = feature.properties.filename;
+
+						shotList.push(gjBox);
+
+						//prevPano = shotList[0];
+
+						gjBox.visible = false;
+						//scene.add(gjBox);
+						panoBIMGroup.add(gjBox);
+
+					});
+
+					prevPano = shotList[0];
+
+					scene.add(panoBIMGroup);
+					panoBIMGroup.rotateX(-Math.PI/2);
+					panoBIMGroup.translateZ(-35);
+					panoBIMGroup.translateX(40);
+					panoBIMGroup.translateY(-20);
+					panoBIMGroup.updateMatrixWorld();
+
+					//prevPano = shotList[0];
+					//console.log(prevPano);
+					//moveCamera(shotList[1]);
+
+				});
+			})();
+
+						renderer = new THREE.WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true } );
+						renderer.setPixelRatio( window.devicePixelRatio );
+						renderer.setSize( window.innerWidth, window.innerHeight );
+						renderer.toneMapping = THREE.ACESFilmicToneMapping;
+						renderer.toneMappingExposure = 1;
+						renderer.outputEncoding = THREE.sRGBEncoding;
+
+						renderer.setScissorTest(true);
+
+						container.appendChild( renderer.domElement );
+
+						renderer.autoClear = false;
+
+						var pmremGenerator = new THREE.PMREMGenerator( renderer );
+						pmremGenerator.compileEquirectangularShader();
+
+				//		controls = new OrbitControls( camera, renderer.domElement );
+				//		controls.addEventListener( 'change', render ); // use if there is no animation loop
+				//		controls.update();
+
+						window.addEventListener( 'resize', onWindowResize, false );
+
+						//document.addEventListener("mousedown", onDocumentMouseDown1, false);
+						document.addEventListener( 'pointerdown', onPointerDown );
+
+		/**/
+
+		var points = [
+		  new THREE.Vector3(),
+		  new THREE.Vector3()
+		]
+		var clicks = 0;
+
+		var markerA = new THREE.Mesh(
+		  new THREE.SphereGeometry(0.1, 10, 20),
+		  new THREE.MeshBasicMaterial({
+		    color: 0xff5555
+		  })
+		);
+		var markerB = markerA.clone();
+		var markers = [
+		  markerA, markerB
+		];
+		scene.add(markerA);
+		scene.add(markerB);
+
+		var lineGeometry = new THREE.Geometry();
+		lineGeometry.vertices.push(new THREE.Vector3());
+		lineGeometry.vertices.push(new THREE.Vector3());
+		var lineMaterial = new THREE.LineBasicMaterial({
+		  color: 0xff5555
+		});
+		var line = new THREE.Line(lineGeometry, lineMaterial);
+		scene.add(line);
+
+		function getIntersections(event) {
+		  var vector = new THREE.Vector2();
+
+		  vector.set(
+		    event.clientX / window.innerWidth * 2 - 1,
+		    -(event.clientY / window.innerHeight) * 2 + 1
+		  );
+
+		  var raycaster = new THREE.Raycaster();
+		  raycaster.setFromCamera(vector, camera);
+
+		  var intersects = raycaster.intersectObjects(raycastArray[0].children);
+
+		  return intersects;
+		}
+
+		function setLine(vectorA, vectorB) {
+		  line.geometry.vertices[0].copy(vectorA);
+		  line.geometry.vertices[1].copy(vectorB);
+		  line.geometry.verticesNeedUpdate = true;
+		}
+
+		function onDocumentMouseDown(event) {
+		  //var intersects = getIntersections(event);
+
+		  //if (intersects.length > 0) {
+
+		  //console.log("intersect point ", intersects[0]);
+
+				//var distancePlace = document.getElementById("distancePlace");
+
+		    //points[clicks].copy(intersects[0].point);
+		    //markers[clicks].position.copy(intersects[0].point);
+		    //setLine(intersects[0].point, intersects[0].point);
+		    //clicks++;
+		    //if (clicks > 1){
+		      //var distance = points[0].distanceTo(points[1]);
+		      //distancePlace.innerText = distance + " metres";
+		      //setLine(points[0], points[1]);
+		      //clicks = 0;
+					//renderer.render(scene, camera);
+		    //}
+		  //}
+		}
+
+function moveCamera(targetPano) {
+
+	var panoPath = data_opt.pano_path + targetPano.userData.shot_id;
+	
+	console.log("panoPath ", panoPath);
+	
+	var texPano = new THREE.TextureLoader().load( panoPath,
+		function ( tex ) {
+			// in this example we create the material when the texture is loaded
+			//const material = new THREE.MeshBasicMaterial( {
+			//	map: texture
+			// } );
+
+			 tex.center = new THREE.Vector2(0.5, 0.5);
+			 tex.rotation = Math.PI;
+			 tex.flipY = false;
+
+			 targetPano.scale.x = 1000;
+			 targetPano.scale.y = 1000;
+			 targetPano.scale.z = 1000;
+
+			 targetPano.renderOrder = 998;
+			 //targetPano.onBeforeRender = function( renderer ) { renderer.clearDepth(); };
+
+			 targetPano.material = new THREE.MeshBasicMaterial( { map: tex, side: THREE.DoubleSide, transparent: true, opacity: options.opacityLevel/*, depthFunc: THREE.NeverDepth*/ } );
+			 //targetPano.material.texture.needsUpdate = true;
+
+			 targetPano.material.depthWrite = false;
+
+			 targetPano.material.map.needsUpdate = true;
+			 targetPano.material.needsUpdate = true;
+			 targetPano.visible = true;
+		//	 requestAnimationFrame(render);
+		},
+
+		// onProgress callback currently not supported
+		undefined,
+
+		// onError callback
+		function ( err ) {
+			console.error( 'An error happened.' );
+		}
+	);
+
+/*
+	texPano.center = new THREE.Vector2(0.5, 0.5);
+	texPano.rotation = Math.PI;
+	texPano.flipY = false;
+
+	targetPano.material = new THREE.MeshBasicMaterial( { map: texPano, side: THREE.DoubleSide, transparent: true, opacity: 0.5 } );
+	//targetPano.material.texture.needsUpdate = true;
+	targetPano.material.map.needsUpdate = true;
+	targetPano.material.needsUpdate = true;
+*/
+
+	//var iPos = intersects[0].object.position;
+	var iPos = targetPano.matrixWorld.getPosition();
+
+	camera.position.x = iPos.x;
+	camera.position.y = iPos.y;
+	camera.position.z = iPos.z;
+	camera.updateProjectionMatrix();
+
+	//controls.target.set( iPos.x - 0.001, iPos.y, iPos.z );
+
+		//renderer.render(scene, camera);
+
+		lambert.uniforms.clippingSphere.value.set(iPos.x, iPos.y, iPos.z, options.clippingFar.value * inside);
+
+		if (prevPano) {
+
+			prevPano.scale.x = 1;
+			prevPano.scale.y = 1;
+			prevPano.scale.z = 1;
+
+			prevPano.material = new THREE.MeshBasicMaterial({color: 0xff0000, side: THREE.DoubleSide});
+			prevPano.material.needsUpdate = true;
+		}
+
+		console.log("targetPano ", targetPano);
+
+		prevPano = targetPano.object;
+
+	//	requestAnimationFrame(render);
+		//renderer.render(scene, camera);
+
+}
+
+		function getIntersections1(event) {
+		  var vector = new THREE.Vector2();
+
+		  vector.set(
+		    event.clientX / window.innerWidth * 2 - 1,
+		    -(event.clientY / window.innerHeight) * 2 + 1
+		  );
+
+		  var raycaster = new THREE.Raycaster();
+		  raycaster.setFromCamera(vector, camera);
+
+		  var intersects = raycaster.intersectObjects(shotList);
+
+		  return intersects;
+		}
+
+		function onDocumentMouseDown1(event) {
+		  var intersects = getIntersections1(event);
+
+		  if (intersects.length > 0) {
+
+		  console.log("intersect point ", intersects[0]);
+
+				var distancePlace = document.getElementById("distancePlace");
+
+		    //markers[clicks].position.copy(intersects[0].point);
+
+				//intersects[0].object.material = new THREE.MeshBasicMaterial({color: 0x00ff00, side: THREE.DoubleSide}); //new THREE.Color(0x00ff00); //"#00ff00";
+
+				var panoPath = data_opt.pano_path + intersects[0].object.userData.shot_id;
+				var texPano = new THREE.TextureLoader().load( panoPath );
+
+				texPano.center = new THREE.Vector2(0.5, 0.5);
+				texPano.rotation = Math.PI;
+				texPano.flipY = false;
+
+				intersects[0].object.material = new THREE.MeshBasicMaterial( { map: texPano, side: THREE.DoubleSide, transparent: true, opacity: 0.5 } );
+
+				//var iPos = intersects[0].object.position;
+				var iPos = intersects[0].object.matrixWorld.getPosition();
+
+				camera.position.x = iPos.x;
+				camera.position.y = iPos.y;
+				camera.position.z = iPos.z;
+				camera.updateProjectionMatrix();
+
+				controls.target.set( iPos.x - 0.001, iPos.y, iPos.z );
+
+				//	renderer.render(scene, camera);
+
+					if (prevPano) {
+						console.log(prevPano);
+						prevPano.material = new THREE.MeshBasicMaterial({color: 0xff0000, side: THREE.DoubleSide});
+					}
+
+					prevPano = intersects[0];
+
+		  }
+		}
+
+		var guiButtons = {
+			forward: function() {movePano("forward")}, //function(){ console.log("forward") },
+			back: function() {movePano("back")} //function(){ console.log("back") },
+		};
+
+		gui.add(guiButtons,'forward').name('next panorama');
+		gui.add(guiButtons,'back').name('previous pano');
+
+		function movePano(dirPano) {
+
+			console.log(prevPano);
+
+			var prevID = prevPano.userData.shot_id.split(".")[0];
+			console.log(typeof(prevID));
+			var numStrLen = prevID.length;
+
+			var currPanoID = parseInt(prevID, 10);
+
+			function getNearestPano(id, numStrLen) {
+
+				id = id.toString();
+				var padZeros = numStrLen - id.length;
+
+				function repeatString(n, string) {
+				  var repeat = [];
+				  repeat.length = n + 1;
+				  return repeat.join(string);
+				}
+
+				if (padZeros > 0) {
+
+					//id = "0".repeat(padZeros) + id;
+					id = repeatString(padZeros, "0") + id;
+
+				}
+
+				var queryID = id + data_opt.imgExt; //".jpg";
+
+				console.log("queryID ", queryID);
+
+				for(var j=0; j < shotList.length; j++) {
+					var checkID = shotList[j].userData.shot_id;
+					if(checkID == queryID) {
+					
+						console.log("found position for photo");
+						moveCamera(shotList[j]);
+						prevPano = shotList[j];
+						break;
+					}
+				}
+
+
+
+			}
+
+			if(dirPano == "forward") {
+
+				getNearestPano(currPanoID + data_opt.increment, numStrLen);
+
+			} else {
+
+				getNearestPano(currPanoID - data_opt.increment, numStrLen);
+
+			}
+
+		}
+
+		/**/
+
+	}
+
+					function onWindowResize() {
+
+						camera.aspect = window.innerWidth / window.innerHeight;
+						camera.updateProjectionMatrix();
+
+						renderer.setSize( window.innerWidth, window.innerHeight );
+
+						render();
+
+					}
+
+					//
+
+					function animate() {
+
+						requestAnimationFrame( animate );
+
+						render();
+						//stats.update();
+
+					}
+
+					function render() {
+
+						//requestAnimationFrame(render);
+
+						lat = Math.max( - 85, Math.min( 85, lat ) );
+				phi = THREE.MathUtils.degToRad( 90 - lat );
+				theta = THREE.MathUtils.degToRad( lon );
+
+				const x = 500 * Math.sin( phi ) * Math.cos( theta );
+				const y = 500 * Math.cos( phi );
+				const z = 500 * Math.sin( phi ) * Math.sin( theta );
+
+				camera.lookAt( x, y, z );
+
+						renderer.clear();
+
+						function myFunction0(item) {
+							//console.log(item);
+						  item.visible = options.togglePanoramas;
+						  //document.getElementById("demo").innerHTML = sum;
+						}
+						shotList.forEach(myFunction0);
+
+						if (prevPano) {
+							prevPano.visible = true;
+						}
+
+						renderer.setScissor( 0, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT  );
+						renderer.setViewport( 0, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT );
+
+						//renderer.setClearColor( .background );
+
+						renderer.render( scene, camera );
+
+						renderer.clearDepth();
+
+						function myFunction1(item) {
+							//console.log(item);
+						  item.visible = true;
+						  //document.getElementById("demo").innerHTML = sum;
+						}
+						shotList.forEach(myFunction1);
+
+						if (prevPano) {
+							prevPano.visible = false;
+						}
+
+						renderer.setScissor( SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT );
+						renderer.setViewport( SCREEN_WIDTH / 2, 0, SCREEN_WIDTH / 2, SCREEN_HEIGHT );
+
+						//renderer.setClearColor( view.background );
+
+						renderer.render( scene, overviewCamera );
+
+						//renderer.clear();
+
+					}
+
+					function onPointerDown( event ) {
+
+				//		console.log("in on pointer down");
+						if ( event.isPrimary === false ) return;
+
+						isUserInteracting = true;
+
+						onPointerDownMouseX = event.clientX;
+						onPointerDownMouseY = event.clientY;
+
+						onPointerDownLon = lon;
+						onPointerDownLat = lat;
+
+						document.addEventListener( 'pointermove', onPointerMove );
+						document.addEventListener( 'pointerup', onPointerUp );
+
+					}
+
+					function onPointerMove( event ) {
+					//	console.log("in on pointer move");
+						requestAnimationFrame(render);
+						if ( event.isPrimary === false ) return;
+
+						lon = ( onPointerDownMouseX - event.clientX ) * 0.1 + onPointerDownLon;
+						lat = ( event.clientY - onPointerDownMouseY ) * 0.1 + onPointerDownLat;
+
+					}
+
+					function onPointerUp() {
+
+						if ( event.isPrimary === false ) return;
+
+						isUserInteracting = false;
+
+						document.removeEventListener( 'pointermove', onPointerMove );
+						document.removeEventListener( 'pointerup', onPointerUp );
+
+					}
+
+		</script>
+<!--<script type="text/javascript" src="./index.js"></script>-->
+	</body>
+</html>

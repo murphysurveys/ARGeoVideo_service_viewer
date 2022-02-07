@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - glTF loader</title>
+<style>
+
+  body {
+    overflow: hidden;
+    margin: 0;
+  }
+
+</style>
+
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.97.0/build/three.min.js"></script>
+
+</head>
+<body>
+
+<script>
+
+
+
+  var sphereRadius = {
+    value: 12
+  };
+
+//  function getMaterial(params) {
+
+    var diffuse = 0xffffff;
+    var diffuseBack = "orange";
+
+    var inside = -1;
+
+    let lambert = new THREE.ShaderMaterial({
+      uniforms: THREE.UniformsUtils.merge([THREE.ShaderLib.lambert.uniforms, {
+        clippingSphere: {
+          value: new THREE.Vector4()
+        },
+        diffuseBack: {
+          value: new THREE.Color()
+        }
+      }]),
+
+      vertexShader: THREE.ShaderLib.lambert.vertexShader
+        .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+        .replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+      fragmentShader: THREE.ShaderLib.lambert.fragmentShader
+        .replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;\nuniform vec3 diffuseBack;')
+        .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+        .replace(/#include <clipping_planes_fragment>/g, '#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;')
+        .replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+
+      lights: true,
+
+      side: THREE.DoubleSide,
+
+      flatShading: false
+    });
+
+    lambert.uniforms.clippingSphere.value.set(0, 0, 0, sphereRadius.value * inside);
+    lambert.uniforms.diffuse.value.set(diffuse);
+    lambert.uniforms.diffuseBack.value.set(diffuseBack);
+
+//    return lambert;
+//  }
+
+
+  var scene = new THREE.Scene();
+  var camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 1, 1000);
+  camera.position.set(1, 1.5, 8).setLength(55);
+  var renderer = new THREE.WebGLRenderer({
+    antialias: true
+  });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  document.body.appendChild(renderer.domElement);
+
+
+
+  scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+
+  // base
+  var baseGeom = new THREE.ConeGeometry(20, 30, 4);
+  var base = new THREE.Mesh(baseGeom, lambert);
+  scene.add(base);
+
+  render();
+
+  function render() {
+    requestAnimationFrame(render);
+    renderer.render(scene, camera);
+  }
+
+</script>
+
+</body>
+</html>

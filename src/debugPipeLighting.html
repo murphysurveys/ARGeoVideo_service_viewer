@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<title>three.js webgl - glTF loader</title>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+		<link type="text/css" rel="stylesheet" href="main.css">
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.7/dat.gui.min.js"></script>
+
+	</head>
+
+	<body>
+<div style="position:absolute; color:white;" id="distancePlace">0</div>
+
+<div id="threeJS" style="width:600px; height:600px;"></div>
+
+<script type="x-shader/x-vertex" id="vertexShader">
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				vec4 worldPosition = modelMatrix * vec4( position, 1.0 );
+				vWorldPosition = worldPosition.xyz;
+
+				gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+
+			}
+
+		</script>
+
+		<script type="x-shader/x-fragment" id="fragmentShader">
+
+			uniform vec3 topColor;
+			uniform vec3 bottomColor;
+			uniform float offset;
+			uniform float exponent;
+
+			varying vec3 vWorldPosition;
+
+			void main() {
+
+				float h = normalize( vWorldPosition + offset ).y;
+				gl_FragColor = vec4( mix( bottomColor, topColor, max( pow( max( h , 0.0), exponent ), 0.0 ) ), 1.0 );
+
+			}
+
+		</script>
+
+		<script type="module">
+
+		var SCREEN_WIDTH = 1200; //window.innerWidth;
+		var SCREEN_HEIGHT = 600; //window.innerHeight;
+
+		var aspect = SCREEN_WIDTH / SCREEN_HEIGHT;
+
+		var options = {
+			opacityLevel: 0.9,
+			togglePanoramas: false,
+			toggleBIM: true,
+			lockOrbit: false,
+			clippingFar: 12
+		};
+
+//////start clipping cylinder shader
+/*
+var sphereRadius = {
+  value: 12
+};
+var params = {
+diffuse: "white",
+diffuseBack: "orange",
+inside: false
+};
+
+var clippingSphere = {
+  value: new THREE.Vector4()
+};
+
+  var diffuse = params.diffuse === undefined ? 0xffffff : params.diffuse;
+  var diffuseBack = params.diffuseBack === undefined ? diffuse : params.diffuseBack;
+
+  var inside = params.inside === undefined ? true : params.inside;
+  inside = inside ? 1 : -1;
+
+  let lambert = new THREE.ShaderMaterial({
+    uniforms: THREE.UniformsUtils.merge([THREE.ShaderLib.lambert.uniforms, {
+      clippingSphere: clippingSphere,
+      diffuseBack: {
+        value: new THREE.Color()
+      }
+    }]),
+
+    vertexShader: THREE.ShaderLib.lambert.vertexShader
+      .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+      .replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+    fragmentShader: THREE.ShaderLib.lambert.fragmentShader
+      .replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;\nuniform vec3 diffuseBack;')
+      .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+      .replace(/#include <clipping_planes_fragment>/g, '#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;')
+      .replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+
+    lights: true,
+
+    side: THREE.DoubleSide,
+
+    flatShading: false
+  });
+
+  lambert.uniforms.clippingSphere.value.set(0, 0, 0, sphereRadius.value * inside);
+  lambert.uniforms.diffuse.value.set(diffuse);
+  lambert.uniforms.diffuseBack.value.set(diffuseBack);
+
+/**/
+
+var matList = [];
+
+var params = {
+ diffuse: null,
+ diffuseBack: "orange",
+ inside: false
+};
+
+	 var inside = params.inside === undefined ? true : params.inside;
+	 inside = inside ? 1 : -1;
+
+function glambert(inColor) {
+
+params.diffuse = inColor;
+//var inColor;
+
+var clippingSphere1 = {
+	value: new THREE.Vector4()
+};
+
+
+
+var diffuse = params.diffuse === undefined ? 0xffffff : params.diffuse;
+var diffuseBack = params.diffuseBack === undefined ? diffuse : params.diffuseBack;
+
+    // console.log("uniforms ", THREE.ShaderLib.standard.uniforms);
+    // console.log("vertex lambert ", THREE.ShaderLib.lambert.vertexShader);
+    // console.log("vertex ", THREE.ShaderLib.standard.vertexShader);
+    console.log("fragment lambert", THREE.ShaderLib.lambert.fragmentShader);
+    console.log("fragment ", THREE.ShaderLib.standard.fragmentShader);
+
+     let lambert = new THREE.ShaderMaterial({
+       uniforms: THREE.UniformsUtils.merge([THREE.ShaderLib.standard.uniforms, {
+         clippingSphere: {
+           value: new THREE.Vector4() //clippingSphere1.value
+         },
+         diffuseBack: {
+           value: new THREE.Color()
+         }
+       }]),
+
+      // vertexShader: THREE.ShaderLib.lambert.vertexShader
+      //   .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+      //   .replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+       vertexShader: THREE.ShaderLib.standard.vertexShader
+         .replace(/varying vec3 vViewPosition;/g, 'varying vec3 vViewPosition;\nvarying vec4 worldPosition;')
+         .replace(/#include <worldpos_vertex>/g, 'worldPosition = modelMatrix * vec4( transformed, 1.0 );'),
+
+      // fragmentShader: THREE.ShaderLib.lambert.fragmentShader
+      //  .replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;\nuniform vec3 diffuseBack;')
+      //  .replace(/varying vec3 vLightFront;/g, 'varying vec3 vLightFront;\nvarying vec4 worldPosition;')
+      //  .replace(/#include <clipping_planes_fragment>/g, '#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;')
+      //  .replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+
+       fragmentShader: THREE.ShaderLib.standard.fragmentShader
+         .replace(/uniform float opacity;/g, 'uniform float opacity;\nuniform vec4 clippingSphere;\nuniform vec3 diffuseBack;')
+         .replace(/varying vec3 vViewPosition;/g, 'varying vec3 vViewPosition;\nvarying vec4 worldPosition;')
+         .replace(/#include <clipping_planes_fragment>/g, '#include <clipping_planes_fragment>\n if (distance(worldPosition.xz, clippingSphere.xz) * sign(clippingSphere.w) < clippingSphere.w) discard;')
+         .replace(/#include <dithering_fragment>/g, '#include <dithering_fragment>\n if (!gl_FrontFacing) gl_FragColor.xyz = diffuseBack;'),
+
+       lights: true,
+
+       side: THREE.DoubleSide,
+
+       flatShading: false
+     });
+
+    // console.log("uniforms ", THREE.ShaderLib.standard.uniforms);
+    // console.log("vertex ", THREE.ShaderLib.standard.vertexShader);
+    // console.log("fragment ", THREE.ShaderLib.standard.fragmentShader);
+
+     lambert.uniforms.clippingSphere.value.set(0, 0, 0, options.clippingFar * inside);
+     lambert.uniforms.diffuse.value.set(diffuse);
+     lambert.uniforms.diffuseBack.value.set(diffuseBack);
+		 console.log("lambert ", lambert);
+
+     return lambert;
+
+   }
+/**/
+//////end clipping cylinder shader
+
+		import * as THREE from '../build/three.module.js';
+
+		import { OrbitControls } from './jsm/controls/OrbitControls.js';
+		import { GLTFLoader } from './jsm/loaders/GLTFLoader.js';
+
+		var container, controls;
+		var camera, scene, renderer;
+
+    var mk;
+
+    var ringMesh;
+
+    var gui = new dat.GUI();
+		gui.domElement.parentElement.style.zIndex = 1000;
+
+		gui.add( options, 'clippingFar', 5, 20 ).step( 0.1 ).name( 'visible distance' ).onChange( function ( value ) {
+				options.clippingFar = value;
+				//camera.far = value;
+				matList.forEach(function(item1, index1, arr1) {
+					var lP = item1.uniforms.clippingSphere.value; //lambert.uniforms.clippingSphere.value;
+					//console.log("clipping ", lP, options);
+					item1.uniforms.clippingSphere.value.set(lP.x, lP.y, lP.z, options.clippingFar * inside); //lambert.uniforms.clippingSphere.value.set(lP.x, lP.y, lP.z, options.clippingFar * inside);
+				});
+				ringMesh.scale.set(options.clippingFar/100, options.clippingFar/100, options.clippingFar/100);
+				camera.updateProjectionMatrix();
+				renderer.render(scene, camera);
+			//	console.log("clipping1 ", lP, options);
+		} );
+
+
+		init();
+		render();
+		//animate();
+
+		function init() {
+
+			container = document.getElementById("threeJS");
+
+			camera = new THREE.PerspectiveCamera( 90, 1, 0.01, 1000 );
+			camera.position.set(- 1.8, 0.6, 2.7 );
+
+			scene = new THREE.Scene();
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+
+
+var baseGeom = new THREE.ConeGeometry(8, 20, 4);
+var base = new THREE.Mesh(baseGeom, glambert("white"));
+base.position.set(0,10,-35);
+scene.add(base);
+
+const ringGeometry = new THREE.RingGeometry( options.clippingFar -0.3, options.clippingFar, 32 );
+const ringMaterial = new THREE.MeshBasicMaterial( { color: 0xffff00, side: THREE.DoubleSide } );
+ringMesh = new THREE.Mesh( ringGeometry, ringMaterial );
+ringMesh.rotateX(Math.PI/2);
+scene.add( ringMesh );
+
+const light = new THREE.PointLight( 0xff0000, 1, 100 );
+light.position.set( 0,10,-45 );
+scene.add( light );
+
+			var loader = new GLTFLoader();
+			loader.load( '../assets/0_blender_export.gltf', function ( gltf ) {
+
+				console.log("in gltf ", gltf);
+
+				gltf.scene.traverse( function ( child ) {
+
+					if ( child.isMesh ) {
+
+						//if (child.material.color) {
+						//	console.log("color ", child.material.color);
+						//}
+
+						//child.material.color ? inColor = child.material.color : "white";
+
+						var newMat = glambert(child.material.color);
+
+						child.material = newMat;
+
+						matList.push(newMat);
+
+          //  mk = child;
+          //  scene.add(mk);
+
+						//child.material.depthTest = true;
+				//		child.material.depthTest = false;
+				//		child.material.depthWrite = false;
+				//		child.material = new THREE.MeshStandardMaterial({color: '#ff0000', side: THREE.DoubleSide});
+
+					}
+
+				} );
+
+        scene.add(gltf.scene);
+        gltf.scene.rotateX(-Math.PI/2);
+
+			} );
+/**/
+
+
+			renderer = new THREE.WebGLRenderer( { antialias: true, logarithmicDepthBuffer: true } );
+			renderer.setPixelRatio( window.devicePixelRatio );
+			//renderer.setSize( window.innerWidth, window.innerHeight );
+			renderer.setSize(600, 600);
+
+//			renderer.setScissorTest(true);
+
+			container.appendChild( renderer.domElement );
+
+///			renderer.autoClear = false;
+
+			controls = new OrbitControls( camera, renderer.domElement );
+			controls.update();
+
+		}
+
+
+function render() {
+
+		requestAnimationFrame(render);
+
+	renderer.render( scene, camera );
+
+
+}
+
+		</script>
+	</body>
+</html>
